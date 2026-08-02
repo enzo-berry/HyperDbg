@@ -11,6 +11,11 @@
  */
 #include "pch.h"
 
+#ifdef __linux__
+#    include <sys/stat.h>  // struct stat / stat() for IsFileExistA
+#    include <immintrin.h> // Intel TSX RTM intrinsics (_xbegin/_xend); requires -mrtm
+#endif
+
 //
 // Global Variables
 //
@@ -149,7 +154,7 @@ IsNumber(const string & str)
     // that does not match any of the characters specified in its arguments
     //
     return !str.empty() &&
-           (str.find_first_not_of("[0123456789]") == std::string::npos);
+           (str.find_first_not_of("0123456789") == std::string::npos);
 }
 
 /**
@@ -167,7 +172,11 @@ IsHexNotation(const string & s)
     {
         IsAnyThing = TRUE;
 
-        if (!isxdigit(CptrChar))
+        //
+        // The cast is needed as passing a negative 'char' to the <ctype.h>
+        // functions is undefined behavior
+        //
+        if (!isxdigit((UCHAR)CptrChar))
         {
             return FALSE;
         }
@@ -194,7 +203,11 @@ IsDecimalNotation(const string & s)
     {
         IsAnyThing = TRUE;
 
-        if (!isdigit(CptrChar))
+        //
+        // The cast is needed as passing a negative 'char' to the <ctype.h>
+        // functions is undefined behavior
+        //
+        if (!isdigit((UCHAR)CptrChar))
         {
             return FALSE;
         }
@@ -376,62 +389,55 @@ ConvertStringToUInt32(string TextToConvert, PUINT32 Result)
     TextToConvert.erase(remove(TextToConvert.begin(), TextToConvert.end(), '`'),
                         TextToConvert.end());
 
+    int Base = IsDecimal ? 10 : 16;
+
     if (IsDecimal)
     {
         if (!IsDecimalNotation(TextToConvert))
         {
             return FALSE;
         }
-        else
-        {
-            try
-            {
-                INT I   = std::stoi(TextToConvert);
-                *Result = I;
-                return TRUE;
-            }
-            catch (std::invalid_argument const &)
-            {
-                //
-                // Bad input: std::invalid_argument thrown
-                //
-                return FALSE;
-            }
-            catch (std::out_of_range const &)
-            {
-                //
-                // Integer overflow: std::out_of_range thrown
-                //
-                return FALSE;
-            }
-
-            return FALSE;
-        }
     }
     else
     {
-        //
-        // It's not decimal
-        //
         if (!IsHexNotation(TextToConvert))
         {
             return FALSE;
         }
-        else
+    }
+
+    try
+    {
+        size_t             Pos = 0;
+        unsigned long long ULL = std::stoull(TextToConvert, &Pos, Base);
+
+        //
+        // Make sure the whole string was consumed and the value
+        // actually fits into 32 bits (stoull works in 64-bit space,
+        // so this catches overflow that stoi's signed 32-bit check
+        // would incorrectly flag or silently mishandle)
+        //
+        if (Pos != TextToConvert.size() || ULL > (std::numeric_limits<UINT32>::max)())
         {
-            //
-            // It's hex number
-            //
-            UINT32 TempResult;
-            TempResult = stoi(TextToConvert, nullptr, 16);
-
-            //
-            // Apply the results
-            //
-            *Result = TempResult;
-
-            return TRUE;
+            return FALSE;
         }
+
+        *Result = static_cast<UINT32>(ULL);
+        return TRUE;
+    }
+    catch (std::invalid_argument const &)
+    {
+        //
+        // Bad input: std::invalid_argument thrown
+        //
+        return FALSE;
+    }
+    catch (std::out_of_range const &)
+    {
+        //
+        // Integer overflow: std::out_of_range thrown
+        //
+        return FALSE;
     }
 }
 
@@ -510,7 +516,7 @@ CompareLowerCaseStrings(CommandToken TargetToken, const CHAR * StringToCompare)
     //
     // Convert the token value to 64 bit unsigned integer
     //
-    return _stricmp(TargetTokenValue.c_str(), StringToCompare) == 0;
+    return PlatformStrCaseCmp(TargetTokenValue.c_str(), StringToCompare) == 0;
 }
 
 /**
@@ -609,7 +615,12 @@ ValidateIP(const string & ip)
         // verify that string is number or not and the numbers
         // are in the valid range
         //
-        if (!IsNumber(str) || stoi(str) > 255 || stoi(str) < 0)
+        // 'IsNumber' guarantees a non-empty, digits-only string, so 'strtoul'
+        // cannot fail here; it saturates to ULONG_MAX on overflow, which the
+        // range check below rejects. 'std::stoi' is deliberately avoided as it
+        // throws on both non-numeric and out-of-range input
+        //
+        if (!IsNumber(str) || strtoul(str.c_str(), NULL, 10) > 255)
             return FALSE;
     }
 
@@ -645,6 +656,7 @@ SetPrivilege(HANDLE  Token,          // access token handle
              BOOL    EnablePrivilege // to enable or disable privilege
 )
 {
+#ifdef _WIN32
     TOKEN_PRIVILEGES Tp;
     LUID             Luid;
 
@@ -680,6 +692,16 @@ SetPrivilege(HANDLE  Token,          // access token handle
     }
 
     return TRUE;
+#else
+    //
+    // TODO(Linux): no Windows access-token/privilege model. This helper has no
+    // Linux callers today; wire to capabilities (e.g. CAP_SYS_ADMIN) if needed.
+    //
+    UNREFERENCED_PARAMETER(Token);
+    UNREFERENCED_PARAMETER(Privilege);
+    UNREFERENCED_PARAMETER(EnablePrivilege);
+    return FALSE;
+#endif
 }
 
 /**
@@ -690,7 +712,7 @@ SetPrivilege(HANDLE  Token,          // access token handle
 static inline VOID
 ltrim(std::string & s)
 {
-    s.erase(s.begin(), std::find_if(s.begin(), s.end(), [](int ch) { return !std::isspace(ch); }));
+    s.erase(s.begin(), std::find_if(s.begin(), s.end(), [](CHAR ch) { return !std::isspace((UCHAR)ch); }));
 }
 
 /**
@@ -701,7 +723,7 @@ ltrim(std::string & s)
 static inline VOID
 rtrim(std::string & s)
 {
-    s.erase(std::find_if(s.rbegin(), s.rend(), [](int ch) { return !std::isspace(ch); })
+    s.erase(std::find_if(s.rbegin(), s.rend(), [](CHAR ch) { return !std::isspace((UCHAR)ch); })
                 .base(),
             s.end());
 }
@@ -752,8 +774,17 @@ IsFileExistA(const CHAR * FileName)
 BOOLEAN
 IsFileExistW(const WCHAR * FileName)
 {
+#ifdef _WIN32
     struct _stat64i32 buffer;
     return (_wstat(FileName, &buffer) == 0);
+#else
+    //
+    // TODO(Linux): blocked on the wide-char (2-byte WCHAR -> UTF-8) conversion
+    // work; once available, convert FileName and delegate to IsFileExistA.
+    //
+    UNREFERENCED_PARAMETER(FileName);
+    return FALSE;
+#endif
 }
 
 /**
@@ -791,6 +822,7 @@ IsEmptyString(CHAR * Text)
 VOID
 GetConfigFilePath(PWCHAR ConfigPath)
 {
+#ifdef _WIN32
     WCHAR CurrentPath[MAX_PATH] = {0};
 
     //
@@ -807,6 +839,17 @@ GetConfigFilePath(PWCHAR ConfigPath)
     // Combine current exe path with config file name
     //
     PathCombineW(ConfigPath, CurrentPath, CONFIG_FILE_NAME);
+#else
+    //
+    // TODO(Linux): resolve the executable's directory via readlink("/proc/self/exe")
+    // and append CONFIG_FILE_NAME. Blocked on the wide-char (2-byte WCHAR) work
+    // since ConfigPath is a PWCHAR. For now leave the path empty.
+    //
+    if (ConfigPath != NULL)
+    {
+        ConfigPath[0] = 0;
+    }
+#endif
 }
 
 /**
@@ -819,6 +862,7 @@ GetConfigFilePath(PWCHAR ConfigPath)
 std::vector<std::string>
 ListDirectory(const std::string & Directory, const std::string & Extension)
 {
+#ifdef _WIN32
     WIN32_FIND_DATAA         FindData;
     HANDLE                   Find     = INVALID_HANDLE_VALUE;
     std::string              FullPath = Directory + "\\" + Extension;
@@ -829,14 +873,28 @@ ListDirectory(const std::string & Directory, const std::string & Extension)
     if (Find == INVALID_HANDLE_VALUE)
         throw std::runtime_error("invalid handle value! please check your path...");
 
-    while (FindNextFileA(Find, &FindData) != 0)
+    //
+    // 'FindFirstFileA' already returned the first match in 'FindData', so it
+    // has to be consumed before asking for the next one; otherwise the first
+    // file of the directory is silently dropped from the list
+    //
+    do
     {
         DirList.push_back(Directory + "\\" + std::string(FindData.cFileName));
-    }
+    } while (FindNextFileA(Find, &FindData) != 0);
 
     FindClose(Find);
 
     return DirList;
+#else
+    //
+    // TODO(Linux): reimplement with opendir/readdir + fnmatch(Extension) over
+    // Directory. Only caller today is the script-engine test harness (eval.cpp).
+    //
+    UNREFERENCED_PARAMETER(Directory);
+    UNREFERENCED_PARAMETER(Extension);
+    return std::vector<std::string>();
+#endif
 }
 
 /**
@@ -920,7 +978,7 @@ ConvertStringVectorToCharPointerArray(const std::string & s)
 VOID
 CommonCpuidInstruction(UINT32 Func, UINT32 SubFunc, INT * CpuInfo)
 {
-    CpuIdEx(CpuInfo, Func, SubFunc);
+    CpuCpuIdEx(CpuInfo, Func, SubFunc);
 }
 
 /**
@@ -1022,7 +1080,7 @@ CheckAddressCanonicality(UINT64 VAddr, PBOOLEAN IsKernelAddress)
     //
     // Set whether it's a kernel address or not
     //
-    if (MinVirtualAddressHighHalf < Addr)
+    if (MinVirtualAddressHighHalf <= Addr)
     {
         *IsKernelAddress = TRUE;
     }
