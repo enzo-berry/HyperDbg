@@ -412,3 +412,10 @@ cmake_install.cmake
 /hyperdbg/Makefile
 /hyperdbg/*/Makefile
 /examples/*/*/Makefile
+
+# Linked output of the same in-source build, one entry per CMake target
+# (the rules above only cover the scaffolding; these did not show up when they
+#  were written because the build failed before it reached the link step)
+/hyperdbg/script-engine/libscript-engine.so
+/hyperdbg/libhyperdbg/liblibhyperdbg.so
+/hyperdbg/hyperdbg-cli/hyperdbg-cli

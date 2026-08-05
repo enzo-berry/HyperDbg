@@ -18,6 +18,26 @@
 #endif
 
 //////////////////////////////////////////////////
+//              Compile-time Asserts            //
+//////////////////////////////////////////////////
+
+//
+// static_assert is a keyword in C++ and, since C23, in C as well. In C11/C17 it
+// is only a macro that <assert.h> defines over the _Static_assert keyword, so a
+// C translation unit that reaches the SDK without having included <assert.h>
+// does not see it -- which is every C file of the script engine. Alias it here,
+// in the first SDK header, so the checks in RequestStructures.h and
+// Assertions.h compile in C as well as in C++. Aliasing rather than including
+// <assert.h> keeps the kernel-mode builds, which share these headers, from
+// taking a libc dependency for a purely compile-time check.
+//
+#if !defined(__cplusplus) && !defined(static_assert)
+#    if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && __STDC_VERSION__ < 202311L
+#        define static_assert _Static_assert
+#    endif
+#endif
+
+//////////////////////////////////////////////////
 //               Basic Datatypes                //
 //////////////////////////////////////////////////
 
