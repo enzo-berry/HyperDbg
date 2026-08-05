@@ -160,6 +160,15 @@ equivalent, behavior-preserving.
   (`CommandPt*`/`HyperDbgPt*`, 4), and missing libhyperdbg TUs behind the
   PCI-ID/Vendor, Stepping, text-callback, `ShowMessages`, `IrpBasedBufferThread`
   symbols (14).
+- `include/SDK/headers/BasicTypes.h` — aliased `static_assert` to the
+  `_Static_assert` keyword for C11/C17 C translation units. The SDK's
+  compile-time size checks (4 in `RequestStructures.h`, 2 in `Assertions.h`)
+  are spelled `static_assert`, which in C is only a macro from `<assert.h>`;
+  none of the script-engine's C sources include it, so every one of them failed
+  to compile on GCC. This was blocking the whole `script-engine` target, not
+  just a single file. Not a Linux-only shim in principle — MSVC in C mode only
+  gets away with it because `<windows.h>` drags `<assert.h>` in — but the alias
+  is inert wherever `static_assert` already resolves, so Windows is unaffected.
 
 ### Kernel-level debugger (remote protocol)
 - `kd.cpp` — largest sweep (~46 `Platform*`): serial open/configure/close via
