@@ -346,7 +346,7 @@ UdCheckThreadByProcessId(DWORD Pid, DWORD Tid)
 /**
  * @brief Attach to a target process
  * @param FileName
- * @param CommandLine
+ * @param CommandLine The arguments of the process (without the image path), can be NULL
  * @param ProcessInformation
  *
  * @return BOOLEAN
@@ -354,12 +354,46 @@ UdCheckThreadByProcessId(DWORD Pid, DWORD Tid)
 BOOLEAN
 UdCreateSuspendedProcess(const WCHAR * FileName, const WCHAR * CommandLine, PPROCESS_INFORMATION ProcessInformation)
 {
+    std::vector<WCHAR> FullCommandLine;
+
+    if (CommandLine != NULL)
+    {
+        //
+        // CreateProcess treats lpCommandLine as the *entire* command line, so its
+        // first token becomes argv[0]. The callers only pass the arguments, so the
+        // quoted image path is prepended here: "<FileName>" <CommandLine>
+        // Otherwise, the target would see the first argument as argv[0]
+        //
+        // Also, CreateProcessW may modify lpCommandLine, so it must be a writable
+        // buffer rather than the caller's (possibly const) string
+        //
+        FullCommandLine.push_back((WCHAR)'"');
+
+        for (const WCHAR * Ptr = FileName; *Ptr != 0; Ptr++)
+        {
+            FullCommandLine.push_back(*Ptr);
+        }
+
+        FullCommandLine.push_back((WCHAR)'"');
+        FullCommandLine.push_back((WCHAR)' ');
+
+        for (const WCHAR * Ptr = CommandLine; *Ptr != 0; Ptr++)
+        {
+            FullCommandLine.push_back(*Ptr);
+        }
+
+        FullCommandLine.push_back(0);
+    }
+
     //
     // Create process suspended
     //
-    if (!PlatformCreateProcess(FileName, CommandLine, CREATE_SUSPENDED | CREATE_NEW_CONSOLE, ProcessInformation))
+    if (!PlatformCreateProcess(FileName,
+                               FullCommandLine.empty() ? NULL : FullCommandLine.data(),
+                               CREATE_SUSPENDED | CREATE_NEW_CONSOLE,
+                               ProcessInformation))
     {
-        ShowMessages("err, start process failed (%x)", PlatformGetLastError());
+        ShowMessages("err, start process failed (%x)\n", PlatformGetLastError());
         return FALSE;
     }
 
@@ -434,7 +468,10 @@ UdAttachToProcess(UINT32        TargetPid,
         //
         // Start the process in suspended state
         //
-        UdCreateSuspendedProcess(TargetFileAddress, CommandLine, &ProcInfo);
+        if (!UdCreateSuspendedProcess(TargetFileAddress, CommandLine, &ProcInfo))
+        {
+            return FALSE;
+        }
 
         //
         // Set the process id and thread id
