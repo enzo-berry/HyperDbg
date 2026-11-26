@@ -69,6 +69,10 @@ typedef enum _DEBUGGER_OUTPUT_SOURCE_STATUS
     DEBUGGER_OUTPUT_SOURCE_STATUS_ALREADY_OPENED,
     DEBUGGER_OUTPUT_SOURCE_STATUS_ALREADY_CLOSED,
     DEBUGGER_OUTPUT_SOURCE_STATUS_UNKNOWN_ERROR,
+    DEBUGGER_OUTPUT_SOURCE_STATUS_SUCCESSFULLY_FLUSHED,
+    DEBUGGER_OUTPUT_SOURCE_STATUS_SUCCESSFULLY_REOPENED,
+    DEBUGGER_OUTPUT_SOURCE_STATUS_NOT_OPENED,
+    DEBUGGER_OUTPUT_SOURCE_STATUS_NOT_SUPPORTED,
 
 } DEBUGGER_OUTPUT_SOURCE_STATUS;
 
@@ -86,7 +90,8 @@ typedef struct _DEBUGGER_EVENT_FORWARDING
     UINT64                          OutputUniqueTag;
     LIST_ENTRY
     OutputSourcesList; // Linked-list of output sources list
-    CHAR Name[MAXIMUM_CHARACTERS_FOR_EVENT_FORWARDING_NAME];
+    CHAR   Name[MAXIMUM_CHARACTERS_FOR_EVENT_FORWARDING_NAME];
+    CHAR * Address; // The address (path, ip:port, etc.) of the source, used for reopening it
 
 } DEBUGGER_EVENT_FORWARDING, *PDEBUGGER_EVENT_FORWARDING;
 
@@ -102,6 +107,12 @@ ForwardingOpenOutputSource(PDEBUGGER_EVENT_FORWARDING SourceDescriptor);
 
 DEBUGGER_OUTPUT_SOURCE_STATUS
 ForwardingCloseOutputSource(PDEBUGGER_EVENT_FORWARDING SourceDescriptor);
+
+DEBUGGER_OUTPUT_SOURCE_STATUS
+ForwardingFlushOutputSource(PDEBUGGER_EVENT_FORWARDING SourceDescriptor);
+
+DEBUGGER_OUTPUT_SOURCE_STATUS
+ForwardingReopenOutputSource(PDEBUGGER_EVENT_FORWARDING SourceDescriptor);
 
 BOOLEAN
 ForwardingCheckAndPerformEventForwarding(UINT32 OperationCode,
@@ -121,4 +132,5 @@ VOID *
 ForwardingCreateOutputSource(DEBUGGER_EVENT_FORWARDING_TYPE SourceType,
                              const string &                 Description,
                              SOCKET *                       Socket,
-                             HMODULE *                      Module);
+                             HMODULE *                      Module,
+                             BOOLEAN                        AppendToFile);
