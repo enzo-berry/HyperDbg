@@ -793,6 +793,73 @@ PlatformOpenFileForWritingNarrow(const CHAR * Path)
 }
 
 /**
+ * @brief Platform independent wrapper to open (or create) a file for appending
+ *
+ * @details Same as PlatformOpenFileForWritingNarrow, but the existing content is
+ *          preserved and every write goes to the end of the file
+ *
+ * @param Path narrow path of the file
+ * @return HANDLE handle of the file, or INVALID_HANDLE_VALUE on failure
+ */
+HANDLE
+PlatformOpenFileForAppendingNarrow(const CHAR * Path)
+{
+#if defined(_WIN32)
+    HANDLE FileHandle = CreateFileA(Path, GENERIC_WRITE, 0, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+
+    if (FileHandle == INVALID_HANDLE_VALUE)
+    {
+        return INVALID_HANDLE_VALUE;
+    }
+
+    if (SetFilePointer(FileHandle, 0, NULL, FILE_END) == INVALID_SET_FILE_POINTER &&
+        GetLastError() != NO_ERROR)
+    {
+        CloseHandle(FileHandle);
+        return INVALID_HANDLE_VALUE;
+    }
+
+    return FileHandle;
+#elif defined(__linux__)
+    FILE * File = fopen(Path, "ab");
+
+    if (File == NULL)
+    {
+        return INVALID_HANDLE_VALUE;
+    }
+
+    return (HANDLE)File;
+#else
+#    error "Unsupported platform"
+#endif
+}
+
+/**
+ * @brief Platform independent wrapper to flush the buffers of an open file
+ *        so that all the written data reaches the disk
+ *
+ * @param FileHandle handle returned by PlatformOpenFileForWriting(Narrow) or
+ *        PlatformOpenFileForAppendingNarrow
+ * @return BOOLEAN TRUE on success
+ */
+BOOLEAN
+PlatformFlushFile(HANDLE FileHandle)
+{
+#if defined(_WIN32)
+    return (BOOLEAN)FlushFileBuffers(FileHandle);
+#elif defined(__linux__)
+    if (fflush((FILE *)FileHandle) != 0)
+    {
+        return FALSE;
+    }
+
+    return (BOOLEAN)(fsync(fileno((FILE *)FileHandle)) == 0);
+#else
+#    error "Unsupported platform"
+#endif
+}
+
+/**
  * @brief Platform independent wrapper to write a buffer to an open file
  *
  * @param FileHandle handle returned by PlatformOpenFileForWriting

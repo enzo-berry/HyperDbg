@@ -30,7 +30,7 @@ CommandOutputHelp()
 
     ShowMessages("syntax : \toutput\n");
     ShowMessages("syntax : \toutput [create Name (string)] [file|namedpipe|tcp|module Address (string)]\n");
-    ShowMessages("syntax : \toutput [open|close Name (string)]\n");
+    ShowMessages("syntax : \toutput [open|close|flush|reopen Name (string)]\n");
 
     ShowMessages("\n");
     ShowMessages("\t\te.g : output\n");
@@ -45,6 +45,47 @@ CommandOutputHelp()
                  "c:\\rev\\event_forwarding.dll\n");
     ShowMessages("\t\te.g : output open MyOutputName1\n");
     ShowMessages("\t\te.g : output close MyOutputName1\n");
+    ShowMessages("\t\te.g : output flush MyOutputName1\n");
+    ShowMessages("\t\te.g : output reopen MyOutputName1\n");
+
+    ShowMessages("\n");
+    ShowMessages("'flush' writes the buffered data of a file output to the disk, "
+                 "'reopen' closes the output (if it's not already closed) and opens it again "
+                 "(files are reopened in the append mode)\n");
+}
+
+/**
+ * @brief find an output source by its name
+ *
+ * @param Name
+ * @return PDEBUGGER_EVENT_FORWARDING NULL if not found
+ */
+static PDEBUGGER_EVENT_FORWARDING
+CommandOutputFindSourceByName(const string & Name)
+{
+    PLIST_ENTRY TempList;
+
+    if (!g_OutputSourcesInitialized)
+    {
+        return NULL;
+    }
+
+    TempList = &g_OutputSources;
+
+    while (&g_OutputSources != TempList->Flink)
+    {
+        TempList = TempList->Flink;
+
+        PDEBUGGER_EVENT_FORWARDING CurrentOutputSourceDetails =
+            CONTAINING_RECORD(TempList, DEBUGGER_EVENT_FORWARDING, OutputSourcesList);
+
+        if (strcmp(CurrentOutputSourceDetails->Name, Name.c_str()) == 0)
+        {
+            return CurrentOutputSourceDetails;
+        }
+    }
+
+    return NULL;
 }
 
 /**
@@ -252,7 +293,7 @@ CommandOutput(vector<CommandToken> CommandTokens, string Command)
         //
         DetailsOfSource = GetCaseSensitiveStringFromCommandToken(CommandTokens.at(4));
 
-        SourceHandle = ForwardingCreateOutputSource(Type, DetailsOfSource, &Socket, &Module);
+        SourceHandle = ForwardingCreateOutputSource(Type, DetailsOfSource, &Socket, &Module, FALSE);
 
         //
         // Check if it's a valid handle or not
@@ -277,6 +318,20 @@ CommandOutput(vector<CommandToken> CommandTokens, string Command)
         }
 
         PlatformZeroMemory(EventForwardingObject, sizeof(DEBUGGER_EVENT_FORWARDING));
+
+        //
+        // Keep the address of the source, so it can be reopened later
+        //
+        EventForwardingObject->Address = (CHAR *)malloc(DetailsOfSource.size() + 1);
+
+        if (EventForwardingObject->Address == NULL)
+        {
+            free(EventForwardingObject);
+            ShowMessages("err, in allocating memory for event forwarding\n");
+            return;
+        }
+
+        memcpy(EventForwardingObject->Address, DetailsOfSource.c_str(), DetailsOfSource.size() + 1);
 
         //
         // Set the state
@@ -473,6 +528,54 @@ CommandOutput(vector<CommandToken> CommandTokens, string Command)
         {
             ShowMessages("err, the name you entered, not found\n");
             return;
+        }
+    }
+    else if (CompareLowerCaseStrings(CommandTokens.at(1), "flush"))
+    {
+        PDEBUGGER_EVENT_FORWARDING SourceDetails =
+            CommandOutputFindSourceByName(GetCaseSensitiveStringFromCommandToken(CommandTokens.at(2)));
+
+        if (SourceDetails == NULL)
+        {
+            ShowMessages("err, the name you entered, not found\n");
+            return;
+        }
+
+        Status = ForwardingFlushOutputSource(SourceDetails);
+
+        if (Status == DEBUGGER_OUTPUT_SOURCE_STATUS_ALREADY_CLOSED)
+        {
+            ShowMessages("err, the name you entered was already closed\n");
+        }
+        else if (Status == DEBUGGER_OUTPUT_SOURCE_STATUS_NOT_OPENED)
+        {
+            ShowMessages("err, the name you entered is not opened\n");
+        }
+        else if (Status == DEBUGGER_OUTPUT_SOURCE_STATUS_NOT_SUPPORTED)
+        {
+            ShowMessages("err, only 'file' outputs are buffered and can be flushed\n");
+        }
+        else if (Status != DEBUGGER_OUTPUT_SOURCE_STATUS_SUCCESSFULLY_FLUSHED)
+        {
+            ShowMessages("err, unable to flush the output source\n");
+        }
+    }
+    else if (CompareLowerCaseStrings(CommandTokens.at(1), "reopen"))
+    {
+        PDEBUGGER_EVENT_FORWARDING SourceDetails =
+            CommandOutputFindSourceByName(GetCaseSensitiveStringFromCommandToken(CommandTokens.at(2)));
+
+        if (SourceDetails == NULL)
+        {
+            ShowMessages("err, the name you entered, not found\n");
+            return;
+        }
+
+        Status = ForwardingReopenOutputSource(SourceDetails);
+
+        if (Status != DEBUGGER_OUTPUT_SOURCE_STATUS_SUCCESSFULLY_REOPENED)
+        {
+            ShowMessages("err, unable to reopen the output source (it's closed now)\n");
         }
     }
     else

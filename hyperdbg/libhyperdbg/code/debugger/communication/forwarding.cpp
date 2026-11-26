@@ -101,6 +101,57 @@ ForwardingOpenOutputSource(PDEBUGGER_EVENT_FORWARDING SourceDescriptor)
 }
 
 /**
+ * @brief Releases the resources (handle, socket, module) of the output source
+ * @param SourceDescriptor Descriptor of the source
+ *
+ * @details The caller is responsible for checking and setting the state
+ *
+ * @return BOOLEAN whether the type of the source was valid or not
+ */
+static BOOLEAN
+ForwardingReleaseOutputSource(PDEBUGGER_EVENT_FORWARDING SourceDescriptor)
+{
+    switch (SourceDescriptor->Type)
+    {
+    case EVENT_FORWARDING_FILE:
+
+        //
+        // Close the handle
+        //
+        PlatformCloseFile(SourceDescriptor->Handle);
+        return TRUE;
+
+    case EVENT_FORWARDING_TCP:
+
+        //
+        // Shutdown connection and cleanup
+        //
+        CommunicationClientShutdownConnection(SourceDescriptor->Socket);
+        CommunicationClientCleanup(SourceDescriptor->Socket);
+        return TRUE;
+
+    case EVENT_FORWARDING_NAMEDPIPE:
+
+        //
+        // Close the pipe
+        //
+        NamedPipeClientClosePipe(SourceDescriptor->Handle);
+        return TRUE;
+
+    case EVENT_FORWARDING_MODULE:
+
+        //
+        // Free the library
+        //
+        PlatformFreeLibrary(SourceDescriptor->Module);
+        return TRUE;
+
+    default:
+        return FALSE;
+    }
+}
+
+/**
  * @brief Closes the output source
  * @param SourceDescriptor Descriptor of the source
  *
@@ -120,8 +171,7 @@ ForwardingCloseOutputSource(PDEBUGGER_EVENT_FORWARDING SourceDescriptor)
     //
     // Check if not opened
     //
-    if (SourceDescriptor->State == EVENT_FORWARDING_STATE_NOT_OPENED ||
-        SourceDescriptor->State != EVENT_FORWARDING_STATE_OPENED)
+    if (SourceDescriptor->State != EVENT_FORWARDING_STATE_OPENED)
     {
         //
         // Not opennd ? or state other than opened ?
@@ -137,61 +187,114 @@ ForwardingCloseOutputSource(PDEBUGGER_EVENT_FORWARDING SourceDescriptor)
     //
     // Now, it's time to close the source based on its type
     //
-    if (SourceDescriptor->Type == EVENT_FORWARDING_FILE)
+    if (ForwardingReleaseOutputSource(SourceDescriptor))
     {
-        //
-        // Close the handle
-        //
-        PlatformCloseFile(SourceDescriptor->Handle);
-
-        //
-        // Return the status
-        //
-        return DEBUGGER_OUTPUT_SOURCE_STATUS_SUCCESSFULLY_CLOSED;
-    }
-    else if (SourceDescriptor->Type == EVENT_FORWARDING_TCP)
-    {
-        //
-        // Shutdown connection
-        //
-        CommunicationClientShutdownConnection(SourceDescriptor->Socket);
-
-        //
-        // Cleanup
-        //
-        CommunicationClientCleanup(SourceDescriptor->Socket);
-
-        //
-        // Return the status
-        //
-        return DEBUGGER_OUTPUT_SOURCE_STATUS_SUCCESSFULLY_CLOSED;
-    }
-    else if (SourceDescriptor->Type == EVENT_FORWARDING_NAMEDPIPE)
-    {
-        //
-        // Close the file
-        //
-        NamedPipeClientClosePipe(SourceDescriptor->Handle);
-
-        //
-        // Return the status
-        //
-        return DEBUGGER_OUTPUT_SOURCE_STATUS_SUCCESSFULLY_CLOSED;
-    }
-    else if (SourceDescriptor->Type == EVENT_FORWARDING_MODULE)
-    {
-        //
-        // Free the library
-        //
-        PlatformFreeLibrary(SourceDescriptor->Module);
-
-        //
-        // Return the status
-        //
         return DEBUGGER_OUTPUT_SOURCE_STATUS_SUCCESSFULLY_CLOSED;
     }
 
     return DEBUGGER_OUTPUT_SOURCE_STATUS_UNKNOWN_ERROR;
+}
+
+/**
+ * @brief Flushes the buffered data of the output source to its target
+ * @param SourceDescriptor Descriptor of the source
+ *
+ * @details Only file sources are buffered (by the operating system), the other
+ * types send the data directly
+ *
+ * @return DEBUGGER_OUTPUT_SOURCE_STATUS return status of the flushing function
+ */
+DEBUGGER_OUTPUT_SOURCE_STATUS
+ForwardingFlushOutputSource(PDEBUGGER_EVENT_FORWARDING SourceDescriptor)
+{
+    if (SourceDescriptor->State == EVENT_FORWARDING_CLOSED)
+    {
+        return DEBUGGER_OUTPUT_SOURCE_STATUS_ALREADY_CLOSED;
+    }
+
+    if (SourceDescriptor->State != EVENT_FORWARDING_STATE_OPENED)
+    {
+        return DEBUGGER_OUTPUT_SOURCE_STATUS_NOT_OPENED;
+    }
+
+    if (SourceDescriptor->Type != EVENT_FORWARDING_FILE)
+    {
+        return DEBUGGER_OUTPUT_SOURCE_STATUS_NOT_SUPPORTED;
+    }
+
+    if (!PlatformFlushFile(SourceDescriptor->Handle))
+    {
+        return DEBUGGER_OUTPUT_SOURCE_STATUS_UNKNOWN_ERROR;
+    }
+
+    return DEBUGGER_OUTPUT_SOURCE_STATUS_SUCCESSFULLY_FLUSHED;
+}
+
+/**
+ * @brief Reopens the output source
+ * @param SourceDescriptor Descriptor of the source
+ *
+ * @details The current resources of the source (if any) are released, then the
+ * source is created again from its address and opened. This also makes it
+ * possible to reuse a closed source. File sources are reopened in the append
+ * mode, so the previously written data is kept. The output tag stays the same,
+ * so the events that use this source keep forwarding to it
+ *
+ * @return DEBUGGER_OUTPUT_SOURCE_STATUS return status of the reopening function
+ */
+DEBUGGER_OUTPUT_SOURCE_STATUS
+ForwardingReopenOutputSource(PDEBUGGER_EVENT_FORWARDING SourceDescriptor)
+{
+    PVOID   NewHandle;
+    SOCKET  NewSocket = 0;
+    HMODULE NewModule = NULL;
+
+    if (SourceDescriptor->Address == NULL)
+    {
+        return DEBUGGER_OUTPUT_SOURCE_STATUS_UNKNOWN_ERROR;
+    }
+
+    //
+    // Release the current resources (a closed source is already released). The
+    // state is changed first, so no event is forwarded to the released handle
+    //
+    if (SourceDescriptor->State != EVENT_FORWARDING_CLOSED)
+    {
+        SourceDescriptor->State = EVENT_FORWARDING_CLOSED;
+        ForwardingReleaseOutputSource(SourceDescriptor);
+    }
+
+    //
+    // Create the source again, if it fails, the source remains closed
+    //
+    NewHandle = ForwardingCreateOutputSource(SourceDescriptor->Type,
+                                             SourceDescriptor->Address,
+                                             &NewSocket,
+                                             &NewModule,
+                                             TRUE);
+
+    if (NewHandle == INVALID_HANDLE_VALUE)
+    {
+        return DEBUGGER_OUTPUT_SOURCE_STATUS_UNKNOWN_ERROR;
+    }
+
+    if (SourceDescriptor->Type == EVENT_FORWARDING_TCP)
+    {
+        SourceDescriptor->Socket = NewSocket;
+    }
+    else if (SourceDescriptor->Type == EVENT_FORWARDING_MODULE)
+    {
+        SourceDescriptor->Module = NewModule;
+        SourceDescriptor->Handle = NewHandle;
+    }
+    else
+    {
+        SourceDescriptor->Handle = NewHandle;
+    }
+
+    SourceDescriptor->State = EVENT_FORWARDING_STATE_OPENED;
+
+    return DEBUGGER_OUTPUT_SOURCE_STATUS_SUCCESSFULLY_REOPENED;
 }
 
 /**
@@ -200,6 +303,8 @@ ForwardingCloseOutputSource(PDEBUGGER_EVENT_FORWARDING SourceDescriptor)
  * @param Description Description of the source
  * @param Socket Socket object in the case of TCP connection
  * @param Module Module object in the case of loading modules
+ * @param AppendToFile Whether to append to the end of the file (in the case
+ * of files) instead of writing from its beginning
  *
  * @details If the target connection is a tcp connection then there
  * is no handle and instead there is a socket, this way we pass a
@@ -215,7 +320,8 @@ PVOID
 ForwardingCreateOutputSource(DEBUGGER_EVENT_FORWARDING_TYPE SourceType,
                              const string &                 Description,
                              SOCKET *                       Socket,
-                             HMODULE *                      Module)
+                             HMODULE *                      Module,
+                             BOOLEAN                        AppendToFile)
 {
     string IpPortDelimiter;
     string Ip;
@@ -226,7 +332,8 @@ ForwardingCreateOutputSource(DEBUGGER_EVENT_FORWARDING_TYPE SourceType,
         //
         // Create a new file
         //
-        HANDLE FileHandle = PlatformOpenFileForWritingNarrow(Description.c_str());
+        HANDLE FileHandle = AppendToFile ? PlatformOpenFileForAppendingNarrow(Description.c_str())
+                                         : PlatformOpenFileForWritingNarrow(Description.c_str());
 
         //
         // The handle might be INVALID_HANDLE_VALUE which will be
@@ -249,6 +356,7 @@ ForwardingCreateOutputSource(DEBUGGER_EVENT_FORWARDING_TYPE SourceType,
         if (hyperdbg_event_forwarding == NULL)
         {
             ShowMessages("err, unable to find the 'hyperdbg_event_forwarding' function\n");
+            PlatformFreeLibrary(ModuleHandle);
             return INVALID_HANDLE_VALUE;
         }
 

@@ -185,8 +185,18 @@ PlatformOpenFileForWriting(const WCHAR * Path);
 HANDLE
 PlatformOpenFileForWritingNarrow(const CHAR * Path);
 
+//
+// Narrow variant that preserves the existing content and appends every write
+// to the end of the file (used when reopening an event-forwarding file sink)
+//
+HANDLE
+PlatformOpenFileForAppendingNarrow(const CHAR * Path);
+
 BOOLEAN
 PlatformWriteFile(HANDLE FileHandle, const VOID * Buffer, DWORD NumberOfBytes);
+
+BOOLEAN
+PlatformFlushFile(HANDLE FileHandle);
 
 BOOLEAN
 PlatformCloseFile(HANDLE FileHandle);
